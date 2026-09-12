@@ -90,7 +90,10 @@ async def start_web_server():
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
+    try:
+        await site.start()
+    except Exception as e:
+        print(f"Web server port bypass: {e}")
 
 # ================= USERBOT COMMAND HANDLERS =================
 def register_userbot_handlers(client: TelegramClient):
