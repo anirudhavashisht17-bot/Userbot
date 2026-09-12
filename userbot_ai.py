@@ -247,3 +247,12 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# Railway persistent runtime guard
+import asyncio
+try:
+    loop = asyncio.get_event_loop()
+    if not loop.is_running():
+        loop.run_forever()
+except Exception:
+    pass
