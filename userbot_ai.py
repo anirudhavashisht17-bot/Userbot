@@ -25,7 +25,7 @@ conn.commit()
 active_clients = {}
 login_states = {}
 gc_locks = {}
-taglocks = {}
+taglocks = {}  # {chat_id: target_msg_id}
 
 # ================= KEEP-ALIVE SERVER =================
 async def handle_ping(request):
@@ -80,7 +80,8 @@ def register_userbot_handlers(client: TelegramClient):
             "⟡➣ `.lockgc` / `.unlockgc` / `.locked`\n"
             "⟡➣ `.pin` / `.unpin` / `.unpinall`\n"
             "⟡➣ `.check` / `.admins` / `.zombies`\n"
-            "⟡➣ `.taglock` / `.untaglock`\n"
+            "⟡➣ `.taglock <link>` / `.taglock` (reply to lock)\n"
+            "⟡➣ `.untaglock` (stop taglock)\n"
             "⟡➣ `/devices` (Owner only)\n"
             "❁════════════════════❁"
         )
@@ -101,45 +102,71 @@ def register_userbot_handlers(client: TelegramClient):
         except Exception as e:
             await event.edit(f"❌ Failed: `{e}`")
 
+    # ================= AUTO TAGLOCK FEATURE =================
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.taglock(?:\s+(.+))?$"))
     async def taglock_cmd(event):
         arg = (event.pattern_match.group(1) or "").strip()
         chat_id = event.chat_id
         target_msg_id = None
+
         if arg:
+            # Handles link formats like t.me/c/1234567/890 or t.me/username/890
             link_match = re.search(r"t\.me/(?:c/)?([^/]+)/(\d+)", arg)
             if link_match:
                 target_msg_id = int(link_match.group(2))
             elif arg.isdigit():
                 target_msg_id = int(arg)
+
         if not target_msg_id and event.is_reply:
             rep = await event.get_reply_message()
             target_msg_id = rep.id
+
         if not target_msg_id:
-            return await event.edit("❌ Reply to a message with `.taglock` or provide link.")
+            return await event.edit("❌ **Usage:** Reply to a message with `.taglock` or `.taglock <msg_link>`")
+
         taglocks[chat_id] = target_msg_id
-        await event.edit(f"🎯 **Taglock Activated on ID:** `{target_msg_id}`")
+        await event.edit(f"🎯 **Taglock Set!**\nAb aap is group mein jo bhi type karoge wo automatically Message ID `{target_msg_id}` ko tag/reply hokar send hoga.")
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.untaglock$"))
     async def untaglock_cmd(event):
-        taglocks.pop(event.chat_id, None)
-        await event.edit("🔓 Taglock disabled.")
+        if event.chat_id in taglocks:
+            taglocks.pop(event.chat_id, None)
+            await event.edit("🔓 **Taglock Removed!** Ab normal messages send honge.")
+        else:
+            await event.edit("❌ Is chat mein koi taglock active nahi hai.")
 
-    @client.on(events.NewMessage)
-    async def auto_taglock_listener(event):
-        if event.chat_id not in taglocks:
+    # Intercept outgoing messages to tag the locked target
+    @client.on(events.NewMessage(outgoing=True))
+    async def outgoing_taglock_handler(event):
+        chat_id = event.chat_id
+        if chat_id not in taglocks:
             return
-        if event.text and event.text.startswith((".taglock", ".untaglock", ".ping", ".alive")):
+
+        text = event.text or ""
+        # Don't tag command messages
+        if text.startswith((".", "/")):
             return
-        target_id = taglocks[event.chat_id]
+
+        target_id = taglocks[chat_id]
         if event.id == target_id:
             return
+
+        # If already replying to that exact message, skip
+        if event.reply_to_msg_id == target_id:
+            return
+
         try:
-            if not event.reply_to_msg_id:
-                await event.reply("📍", reply_to=target_id)
+            # Delete original untagged message and send directly attached/replying to target
+            media = event.media
+            await event.delete()
+            if media:
+                await event.client.send_file(chat_id, file=media, caption=text, reply_to=target_id)
+            else:
+                await event.client.send_message(chat_id, text, reply_to=target_id)
         except Exception:
             pass
 
+    # ================= GCTOOLS HANDLERS =================
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.ban(?:\s+(.*))?$"))
     async def ban_cmd(event):
         uid = await get_target(event)
