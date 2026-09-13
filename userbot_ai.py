@@ -1,186 +1,64 @@
-"""
-Multi-Userbot Host & Telegram Management Bot with 4x Thomas Bot Army
-Features:
-- Multi-User Session Storage via SQLite & Keep-Alive Web Server
-- Truecaller Lookup Tool (.num <phone_number>)
-- Silent Fight Mode (.silent on / .silent off)
-- Connected Devices Checker (/devices, /connect)
-- 4x Thomas Bot Army Integration
-- Full Moderation, Purge, Clone, TagLock, VC Attack, Target Slow, Fonts, AFK, etc.
-"""
-
 import asyncio
 import os
 import re
 import time
-import random
 import sqlite3
-import aiohttp
 from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError
-from telethon.tl.functions.channels import EditBannedRequest, EditAdminRequest, JoinChannelRequest
-from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
-from telethon.tl.functions.account import UpdateProfileRequest, GetAuthorizationsRequest
-from telethon.tl.functions.messages import EditChatDefaultBannedRightsRequest
-from telethon.tl.types import ChatBannedRights, ChatAdminRights, InputPhoto
+from telethon.tl.functions.account import GetAuthorizationsRequest
+from telethon.tl.functions.channels import EditBannedRequest
+from telethon.tl.types import ChatBannedRights
 
-# ================= CONFIGURATION =================
-API_ID = 33291160
-API_HASH = "a19e7fa3783e6e282b70e7fa2969302c"
+API_ID = int(os.environ.get("API_ID", 33291160))
+API_HASH = os.environ.get("API_HASH", "a19e7fa3783e6e282b70e7fa2969302c").strip()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8647284010:AAE6B_qCYVmZB5Sd066xSdMBncG-ODHNI3Y").strip()
 PORT = int(os.environ.get("PORT", 8080))
+OWNER_ID = 8225211569
 
-THOMAS_TOKENS = [
-    "8570988727:AAH8clmg-VhZaunNl8nh8SgDTAE08cl2T30",
-    "8978651083:AAEeSwMK9gyNMu7gymd7bb0c066gMd7SvuA",
-    "8544011902:AAFm30UXwK_Mi45ZfcDO-kiS4tHFRCaYV4I",
-    "8931340247:AAFHpTMhGngwYEToOweIzBLCACqiXJKdzVs"
-]
-
-SUPPORT_CHANNEL = "YourChannelUsername"
-
-RAID_PRESETS = [
-    "HI HLWW KYA HO GYA",
-    "ARE BHAI KYA HO GYA BATAO??",
-    "SUNO TOH SAHI KYA HUA!",
-    "HI HLWW REPLY KYUN NAHI DE RAHE?",
-    "KYA HO GYA BHAI SAB THEEK HAI NA?",
-    "FAST REPLY KARO RE SAB!"
-]
-
-# ================= DATABASE SETUP =================
 conn = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, session_str TEXT, is_active INTEGER)")
-cursor.execute("CREATE TABLE IF NOT EXISTS bot_session (id TEXT PRIMARY KEY, session TEXT)")
 conn.commit()
 
 active_clients = {}
-afk_data = {}
-silent_mode_users = {}
-thomas_clients = []
+login_states = {}
+gc_locks = {}
+taglocks = {}
 
-# ================= FONT MAPS =================
-BOLD_ITALIC_MAP = {
-    'a': '𝒂', 'b': '𝒃', 'c': '𝒄', 'd': '𝒅', 'e': '𝒆', 'f': '𝒇', 'g': '𝒈', 'h': '𝒉', 'i': '𝒊', 'j': '𝒋', 'k': '𝒌', 'l': '𝒍', 'm': '𝒎', 'n': '𝒏', 'o': '𝒐', 'p': '𝒑', 'q': '𝒒', 'r': '𝒓', 's': '𝒔', 't': '𝒕', 'u': '𝒖', 'v': '𝒗', 'w': '𝒘', 'x': '𝒙', 'y': '𝒚', 'z': '𝒛',
-    'A': '𝑨', 'B': '𝑩', 'C': '𝑪', 'D': '𝑫', 'E': '𝑬', 'F': '𝑭', 'G': '𝑮', 'H': '𝑯', 'I': '𝑰', 'J': '𝑱', 'K': '𝑲', 'L': '𝑳', 'M': '𝑴', 'N': '𝑵', 'O': '𝑶', 'P': '𝑷', 'Q': '𝑸', 'R': '𝑹', 'S': '𝑺', 'T': '𝑻', 'U': '𝑼', 'V': '𝑽', 'W': '𝑾', 'X': '𝑿', 'Y': '𝒀', 'Z': '𝒁'
-}
-ITALIC_MAP = {
-    'a': '𝑎', 'b': '𝑏', 'c': '𝑐', 'd': '𝑑', 'e': '𝑒', 'f': '𝑓', 'g': '𝑔', 'h': 'ℎ', 'i': '𝑖', 'j': '𝑗', 'k': '𝑘', 'l': '𝑙', 'm': '𝑚', 'n': '𝑛', 'o': '𝑜', 'p': '𝑝', 'q': '𝑞', 'r': '𝑟', 's': '𝑠', 't': '𝑡', 'u': '𝑢', 'v': '𝑣', 'w': '𝑤', 'x': '𝑥', 'y': '𝑦', 'z': '𝑧',
-    'A': '𝐴', 'B': '𝐵', 'C': '𝐶', 'D': '𝐷', 'E': '𝐸', 'F': '𝐹', 'G': '𝐺', 'H': '𝐻', 'I': '𝐼', 'J': '𝐽', 'K': '𝐾', 'L': '𝐿', 'M': '𝑀', 'N': '𝑁', 'O': '𝑂', 'P': '𝑃', 'Q': '𝑄', 'R': '𝑅', 'S': '𝑆', 'T': '𝑇', 'U': '𝑈', 'V': '𝑉', 'W': '𝑊', 'X': '𝑋', 'Y': '𝑌', 'Z': '𝑍'
-}
-BOX_MAP = {
-    'a': '🄰', 'b': '🄱', 'c': '🄲', 'd': '🄳', 'e': '🄴', 'f': '🄵', 'g': '🄶', 'h': '🄷', 'i': '🄸', 'j': '🄹', 'k': '🄺', 'l': '🄻', 'm': '🄼', 'n': '🄽', 'o': '🄾', 'p': '🄿', 'q': '🅀', 'r': '🅁', 's': '🅂', 't': '🅃', 'u': '🅄', 'v': '🅅', 'w': '🅆', 'x': '🅇', 'y': '🅈', 'z': '🅉',
-    'A': '🄰', 'B': '🄱', 'C': '🄲', 'D': '🄳', 'E': '🄴', 'F': '🄵', 'G': '🄶', 'H': '🄷', 'I': '🄸', 'J': '🄹', 'K': '🄺', 'L': '🄻', 'M': '🄼', 'N': '🄽', 'O': '🄾', 'P': '🄿', 'Q': '🅀', 'R': '🅁', 'S': '🅂', 'T': '🅃', 'U': '🅄', 'V': '🅅', 'W': '🅆', 'X': '🅇', 'Y': '🅈', 'Z': '🅉'
-}
-
-def transform_font(text: str, mapping: dict) -> str:
-    return "".join(mapping.get(c, c) for c in text)
-
-# ================= KEEP-ALIVE SERVER =================
+# Keep-Alive Server
 async def handle_ping(request):
     return web.Response(text="Multi-Userbot Host is Live!")
 
 async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    app.router.add_get("/health", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
     try:
+        app = web.Application()
+        app.router.add_get("/", handle_ping)
+        app.router.add_get("/health", handle_ping)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
         await site.start()
+        print(">> Web server started on port", PORT)
     except Exception as e:
-        print(f"Web server port bypass: {e}")
+        print(f">> Web server port bind skipped: {e}")
 
-# ================= USERBOT COMMAND HANDLERS =================
+async def get_target(event):
+    if event.is_reply:
+        reply = await event.get_reply_message()
+        return reply.sender_id
+    args = event.text.split()
+    if len(args) > 1:
+        try:
+            return int(args[1])
+        except ValueError:
+            user = await event.client.get_entity(args[1])
+            return user.id
+    return None
+
 def register_userbot_handlers(client: TelegramClient):
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.silent(?:\s+(on|off))?$"))
-    async def silent_mode_cmd(event):
-        me = await event.client.get_me()
-        arg = (event.pattern_match.group(1) or "").lower()
-        if arg == "off":
-            silent_mode_users[me.id] = False
-            await event.edit("🔊 **Silent Fight Mode DISABLED! Normal commands are active.**")
-        else:
-            silent_mode_users[me.id] = True
-            await event.edit("🤫 **Silent Fight Mode ENABLED!**\n`.help`, `.ping`, `.alive`, etc. are now muted.")
-
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^/(?:connect|devices|sessions)$"))
-    async def list_connected_devices(event):
-        me = await event.client.get_me()
-        if event.sender_id != me.id and not event.out:
-            return
-        msg = await event.edit("🔍 **Fetching active sessions...**")
-        try:
-            authorizations = await event.client(GetAuthorizationsRequest())
-            text = f"📱 **Active Sessions:** `{len(authorizations.authorizations)}`\n\n"
-            for idx, auth in enumerate(authorizations.authorizations, 1):
-                cur = " *(This)*" if auth.current else ""
-                text += f"**{idx}.** `{auth.device_model}` ({auth.platform}){cur}\n"
-                text += f"   📍 IP: `{auth.ip}` | {auth.country}\n"
-            await msg.edit(text)
-        except Exception as e:
-            await msg.edit(f"❌ Failed: `{e}`")
-
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.num(?:\s+(.+))?$"))
-    async def num_lookup_cmd(event):
-        raw_num = event.pattern_match.group(1)
-        if not raw_num:
-            rep = await event.get_reply_message()
-            if rep and rep.text:
-                match = re.search(r"\+?\d{8,15}", rep.text)
-                if match:
-                    raw_num = match.group(0)
-        if not raw_num:
-            return await event.edit("❌ Usage: `.num <phone_number>`")
-
-        clean_num = re.sub(r"[^\d+]", "", raw_num)
-        if not clean_num.startswith("+"):
-            clean_num = "+91" + clean_num if len(clean_num) == 10 else "+" + clean_num
-
-        await event.edit(f"🔍 **Fetching Truecaller details for** `{clean_num}`...")
-        url = f"https://api-lookup.suraj-dev.me/truecaller?number={clean_num.replace('+', '')}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        name = data.get("name") or data.get("fullName") or "Not Found"
-                        carrier = data.get("carrier") or data.get("operator") or "Unknown"
-                        location = data.get("location") or data.get("circle") or "India"
-                        await event.edit(f"📞 **TRUECALLER INFO**\n👤 Name: `{name}`\n📱 Number: `{clean_num}`\n📡 Carrier: `{carrier}`\n📍 Circle: `{location}`")
-                    else:
-                        await event.edit(f"❌ No records found for `{clean_num}`.")
-        except Exception:
-            await event.edit(f"📞 `{clean_num}` | 🌐 India (+91)\n⚠️ API timed out.")
-
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.help(?:\s+(.+))?$"))
-    async def help_cmd(event):
-        me = await event.client.get_me()
-        if silent_mode_users.get(me.id, False):
-            return
-        help_text = (
-            "⟡═══════⟬ GCTOOLS COMMANDS ⟭═══════⟡\n"
-            "⟡➣ `.num <number>` : Truecaller Information Lookup\n"
-            "⟡➣ `.silent <on/off>` : Toggle Silent Mode\n"
-            "⟡➣ `/devices` : Check Logged-in Sessions\n"
-            "⟡➣ `.ping` / `.alive` : Check Status\n"
-            "⟡➣ `.bolditalic <text>` / `.box <text>`\n"
-            "⟡➣ `.afk <reason>` / `.unafk`\n"
-            "⟡➣ `.tovoice` : Convert Audio to Voice Note\n"
-            "⟡➣ `.thomas status/raid/spam/msg`\n"
-            "⟡═══════════════════════════════════⟡"
-        )
-        await event.edit(help_text)
-
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.ping$"))
     async def ping_cmd(event):
-        me = await event.client.get_me()
-        if silent_mode_users.get(me.id, False):
-            return
         start = time.time()
         await event.edit("🏓 **Pinging...**")
         delta = (time.time() - start) * 1000
@@ -188,74 +66,126 @@ def register_userbot_handlers(client: TelegramClient):
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.alive$"))
     async def alive_cmd(event):
+        await event.edit("🔮 **Thomas Multi-Userbot is Alive & Running 24/7!**")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^(?:\.help|/menu)$"))
+    async def help_cmd(event):
+        await event.edit(
+            "❁═══⟬ GCTOOLS & TAGLOCK ⟭═══❁\n"
+            "⟡➣ `.ping` / `.alive`\n"
+            "⟡➣ `.ban` / `.unban` / `.mute` / `.unmute` / `.kick`\n"
+            "⟡➣ `.purge` / `.purgeme <N>` / `.spurge <kw>` / `.delall`\n"
+            "⟡➣ `.lockgc` / `.unlockgc` / `.locked`\n"
+            "⟡➣ `.pin` / `.unpin` / `.unpinall`\n"
+            "⟡➣ `.check` / `.admins` / `.zombies`\n"
+            "⟡➣ `.taglock` / `.untaglock`\n"
+            "⟡➣ `/devices` (Owner only)\n"
+            "❁════════════════════❁"
+        )
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^/(?:connect|devices|sessions)$"))
+    async def list_connected_devices(event):
         me = await event.client.get_me()
-        if silent_mode_users.get(me.id, False):
-            return
-        await event.edit("🔮 **Userbot AI is Alive & Running 24/7!**")
-
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.afk(?:\s+(.+))?$"))
-    async def afk_cmd(event):
-        reason = event.pattern_match.group(1) or "Busy right now!"
-        me = await event.client.get_me()
-        afk_data[me.id] = {"status": True, "reason": reason}
-        await event.edit(f"💤 **I am now AFK!**\nReason: `{reason}`")
-
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.unafk$"))
-    async def unafk_cmd(event):
-        me = await event.client.get_me()
-        if me.id in afk_data and afk_data[me.id]["status"]:
-            afk_data[me.id]["status"] = False
-            await event.edit("⚡ **AFK Disabled! Back online.**")
-
-    @client.on(events.NewMessage(incoming=True))
-    async def incoming_afk(event):
-        if event.is_private:
-            me = await event.client.get_me()
-            if afk_data.get(me.id, {}).get("status", False):
-                await event.reply(f"💤 I am currently AFK.\nReason: `{afk_data[me.id]['reason']}`")
-
-# ================= RUNNER INITIALIZATION =================
-async def main():
-    await start_web_server()
-    session_env = os.environ.get("STRING_SESSION") or os.environ.get("SESSION") or ""
-    
-    if session_env:
+        if me.id != OWNER_ID:
+            return await event.edit("⛔ Access Denied.")
         try:
-            user_client = TelegramClient(StringSession(session_env.strip()), API_ID, API_HASH)
-            await user_client.start()
-            register_userbot_handlers(user_client)
-            print("Userbot started from Environment Session!")
+            authorizations = await event.client(GetAuthorizationsRequest())
+            text = f"📱 **Active Sessions:** `{len(authorizations.authorizations)}`\n\n"
+            for idx, auth in enumerate(authorizations.authorizations, 1):
+                cur = " *(Current)*" if auth.current else ""
+                text += f"**{idx}.** `{auth.device_model}` ({auth.platform}){cur}\n"
+                text += f"   📍 IP: `{auth.ip}` | {auth.country}\n"
+            await event.edit(text)
         except Exception as e:
-            print(f"Error starting userbot session: {e}")
+            await event.edit(f"❌ Failed: `{e}`")
 
-    cursor.execute("SELECT session_str FROM users WHERE is_active=1")
-    for row in cursor.fetchall():
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.taglock(?:\s+(.+))?$"))
+    async def taglock_cmd(event):
+        arg = (event.pattern_match.group(1) or "").strip()
+        chat_id = event.chat_id
+        target_msg_id = None
+        if arg:
+            link_match = re.search(r"t\.me/(?:c/)?([^/]+)/(\d+)", arg)
+            if link_match:
+                target_msg_id = int(link_match.group(2))
+            elif arg.isdigit():
+                target_msg_id = int(arg)
+        if not target_msg_id and event.is_reply:
+            rep = await event.get_reply_message()
+            target_msg_id = rep.id
+        if not target_msg_id:
+            return await event.edit("❌ Reply to a message with `.taglock` or provide link.")
+        taglocks[chat_id] = target_msg_id
+        await event.edit(f"🎯 **Taglock Activated on ID:** `{target_msg_id}`")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.untaglock$"))
+    async def untaglock_cmd(event):
+        taglocks.pop(event.chat_id, None)
+        await event.edit("🔓 Taglock disabled.")
+
+    @client.on(events.NewMessage)
+    async def auto_taglock_listener(event):
+        if event.chat_id not in taglocks:
+            return
+        if event.text and event.text.startswith((".taglock", ".untaglock", ".ping", ".alive")):
+            return
+        target_id = taglocks[event.chat_id]
+        if event.id == target_id:
+            return
         try:
-            u_client = TelegramClient(StringSession(row[0]), API_ID, API_HASH)
-            await u_client.start()
-            register_userbot_handlers(u_client)
+            if not event.reply_to_msg_id:
+                await event.reply("📍", reply_to=target_id)
         except Exception:
             pass
 
-    if BOT_TOKEN:
-        try:
-            bot_client = TelegramClient('bot_session', API_ID, API_HASH)
-            await bot_client.start(bot_token=BOT_TOKEN)
-            print("Telegram Bot Token started successfully!")
-        except Exception as e:
-            print(f"Bot Token error: {e}")
+def register_bot_handlers(bot: TelegramClient):
+    @bot.on(events.NewMessage(pattern=r"^/start$"))
+    async def bot_start(event):
+        await event.reply("👋 **Multi-Userbot Host is Live!**\nSend `/login` to connect your account.")
 
-    while True:
-        await asyncio.sleep(3600)
+    @bot.on(events.NewMessage(pattern=r"^/status$"))
+    async def bot_status(event):
+        uid = event.sender_id
+        if uid in active_clients:
+            await event.reply("✅ Aapka userbot active chal raha hai!")
+        else:
+            await event.reply("❌ Userbot offline hai. Send `/login`.")
+
+async def main():
+    print(">> Starting host application...")
+    await start_web_server()
+
+    # Safe start String Session without interactive freeze
+    session_env = os.environ.get("STRING_SESSION", "").strip()
+    if session_env:
+        print(">> Connecting STRING_SESSION...")
+        try:
+            u_cl = TelegramClient(StringSession(session_env), API_ID, API_HASH)
+            await u_cl.connect()
+            if await u_cl.is_user_authorized():
+                register_userbot_handlers(u_cl)
+                me = await u_cl.get_me()
+                active_clients[me.id] = u_cl
+                asyncio.create_task(u_cl.run_until_disconnected())
+                print(f">> Userbot connected as {me.first_name} ({me.id})")
+            else:
+                print(">> STRING_SESSION is invalid/expired! Skipping interactive prompt.")
+        except Exception as e:
+            print(f">> Failed to load STRING_SESSION: {e}")
+
+    # Start Bot Token client
+    if BOT_TOKEN:
+        print(">> Connecting Telegram Bot Token...")
+        bot = TelegramClient('bot_session', API_ID, API_HASH)
+        await bot.start(bot_token=BOT_TOKEN)
+        register_bot_handlers(bot)
+        bot_me = await bot.get_me()
+        print(f">> Telegram Bot @{bot_me.username} is fully ONLINE and listening!")
+        await bot.run_until_disconnected()
+    else:
+        print(">> No BOT_TOKEN found! Keep container alive.")
+        while True:
+            await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# Railway persistent runtime guard
-import asyncio
-try:
-    loop = asyncio.get_event_loop()
-    if not loop.is_running():
-        loop.run_forever()
-except Exception:
-    pass
