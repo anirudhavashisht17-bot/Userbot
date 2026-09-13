@@ -8,8 +8,8 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.account import GetAuthorizationsRequest
-from telethon.tl.functions.channels import EditBannedRequest
-from telethon.tl.types import ChatBannedRights
+from telethon.tl.functions.channels import EditBannedRequest, EditAdminRequest
+from telethon.tl.types import ChatBannedRights, ChatAdminRights
 
 API_ID = int(os.environ.get("API_ID", 33291160))
 API_HASH = os.environ.get("API_HASH", "a19e7fa3783e6e282b70e7fa2969302c").strip()
@@ -25,7 +25,7 @@ conn.commit()
 active_clients = {}
 login_states = {}
 gc_locks = {}
-taglocks = {}  # {chat_id: target_msg_id}
+taglocks = {}
 
 # ================= KEEP-ALIVE SERVER =================
 async def handle_ping(request):
@@ -72,20 +72,32 @@ def register_userbot_handlers(client: TelegramClient):
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^(?:\.help|/menu)$"))
     async def help_cmd(event):
-        await event.edit(
-            "❁═══⟬ GCTOOLS & TAGLOCK ⟭═══❁\n"
-            "⟡➣ `.ping` / `.alive`\n"
-            "⟡➣ `.ban` / `.unban` / `.mute` / `.unmute` / `.kick`\n"
-            "⟡➣ `.purge` / `.purgeme <N>` / `.spurge <kw>` / `.delall`\n"
+        help_text = (
+            "⟡═══⟬ GCTOOLS COMMANDS ⟭═══⟡\n"
+            "⟡➣ `.ban`      : Ban replied user\n"
+            "⟡➣ `.unban`    : Unban replied user\n"
+            "⟡➣ `.mute`     : Mute replied user\n"
+            "⟡➣ `.unmute`   : Unmute replied user\n"
+            "⟡➣ `.kick`     : Kick replied user\n"
+            "⟡➣ `.promote`  : Promote user as Admin\n"
+            "⟡➣ `.demote`   : Demote an Admin\n"
+            "⟡➣ `.purge`    : Purge from replied message\n"
+            "⟡➣ `.purgeme`  : Delete your last N messages (.purgeme 5)\n"
+            "⟡➣ `.pin`      : Pin replied message\n"
+            "⟡➣ `.unpin`    : Unpin replied message\n"
+            "⟡➣ `.unpinall` : Unpin all messages\n"
+            "⟡➣ `.admins`   : List group admins\n"
+            "⟡➣ `.zombies`  : Clean deleted accounts\n"
+            "⟡➣ `.ping`     : Check userbot latency\n"
+            "⟡➣ `.spurge` / `.delall` / `.editpurge`\n"
             "⟡➣ `.lockgc` / `.unlockgc` / `.locked`\n"
-            "⟡➣ `.pin` / `.unpin` / `.unpinall`\n"
-            "⟡➣ `.check` / `.admins` / `.zombies`\n"
-            "⟡➣ `.taglock <link>` / `.taglock` (reply to lock)\n"
-            "⟡➣ `.untaglock` (stop taglock)\n"
+            "⟡➣ `.taglock` / `.untaglock`\n"
             "⟡➣ `/devices` (Owner only)\n"
-            "❁════════════════════❁"
+            "⟡═════════════════════════════⟡"
         )
+        await event.edit(help_text)
 
+    # Restrict /devices strictly to OWNER_ID
     @client.on(events.NewMessage(outgoing=True, pattern=r"^/(?:connect|devices|sessions)$"))
     async def list_connected_devices(event):
         me = await event.client.get_me()
@@ -110,7 +122,6 @@ def register_userbot_handlers(client: TelegramClient):
         target_msg_id = None
 
         if arg:
-            # Handles link formats like t.me/c/1234567/890 or t.me/username/890
             link_match = re.search(r"t\.me/(?:c/)?([^/]+)/(\d+)", arg)
             if link_match:
                 target_msg_id = int(link_match.group(2))
@@ -125,17 +136,16 @@ def register_userbot_handlers(client: TelegramClient):
             return await event.edit("❌ **Usage:** Reply to a message with `.taglock` or `.taglock <msg_link>`")
 
         taglocks[chat_id] = target_msg_id
-        await event.edit(f"🎯 **Taglock Set!**\nAb aap is group mein jo bhi type karoge wo automatically Message ID `{target_msg_id}` ko tag/reply hokar send hoga.")
+        await event.edit(f"🎯 **Taglock Activated!** Target ID: `{target_msg_id}`")
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.untaglock$"))
     async def untaglock_cmd(event):
         if event.chat_id in taglocks:
             taglocks.pop(event.chat_id, None)
-            await event.edit("🔓 **Taglock Removed!** Ab normal messages send honge.")
+            await event.edit("🔓 **Taglock Disabled!**")
         else:
-            await event.edit("❌ Is chat mein koi taglock active nahi hai.")
+            await event.edit("❌ No active taglock in this chat.")
 
-    # Intercept outgoing messages to tag the locked target
     @client.on(events.NewMessage(outgoing=True))
     async def outgoing_taglock_handler(event):
         chat_id = event.chat_id
@@ -143,20 +153,14 @@ def register_userbot_handlers(client: TelegramClient):
             return
 
         text = event.text or ""
-        # Don't tag command messages
         if text.startswith((".", "/")):
             return
 
         target_id = taglocks[chat_id]
-        if event.id == target_id:
-            return
-
-        # If already replying to that exact message, skip
-        if event.reply_to_msg_id == target_id:
+        if event.id == target_id or event.reply_to_msg_id == target_id:
             return
 
         try:
-            # Delete original untagged message and send directly attached/replying to target
             media = event.media
             await event.delete()
             if media:
@@ -166,7 +170,7 @@ def register_userbot_handlers(client: TelegramClient):
         except Exception:
             pass
 
-    # ================= GCTOOLS HANDLERS =================
+    # ================= GCTOOLS =================
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.ban(?:\s+(.*))?$"))
     async def ban_cmd(event):
         uid = await get_target(event)
@@ -222,10 +226,54 @@ def register_userbot_handlers(client: TelegramClient):
         except Exception as e:
             await event.edit(f"❌ Failed: `{e}`")
 
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.promote(?:\s+(.*))?$"))
+    async def promote_cmd(event):
+        uid = await get_target(event)
+        if not uid:
+            return await event.edit("❌ Reply to a user to promote.")
+        try:
+            rights = ChatAdminRights(
+                change_info=True,
+                post_messages=True,
+                edit_messages=True,
+                delete_messages=True,
+                ban_users=True,
+                invite_users=True,
+                pin_messages=True,
+                add_admins=False,
+                manage_call=True
+            )
+            await event.client(EditAdminRequest(event.chat_id, uid, rights, "Admin"))
+            await event.edit(f"👑 **Promoted:** `{uid}` to Admin!")
+        except Exception as e:
+            await event.edit(f"❌ Failed: `{e}`")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.demote(?:\s+(.*))?$"))
+    async def demote_cmd(event):
+        uid = await get_target(event)
+        if not uid:
+            return await event.edit("❌ Reply to a user to demote.")
+        try:
+            rights = ChatAdminRights(
+                change_info=False,
+                post_messages=False,
+                edit_messages=False,
+                delete_messages=False,
+                ban_users=False,
+                invite_users=False,
+                pin_messages=False,
+                add_admins=False,
+                manage_call=False
+            )
+            await event.client(EditAdminRequest(event.chat_id, uid, rights, ""))
+            await event.edit(f"📉 **Demoted:** `{uid}` successfully.")
+        except Exception as e:
+            await event.edit(f"❌ Failed: `{e}`")
+
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.purge$"))
     async def purge_cmd(event):
         if not event.is_reply:
-            return await event.edit("❌ Reply to a message.")
+            return await event.edit("❌ Reply to a message to purge from.")
         rep = await event.get_reply_message()
         msgs = []
         async for m in event.client.iter_messages(event.chat_id, min_id=rep.id - 1):
@@ -235,7 +283,7 @@ def register_userbot_handlers(client: TelegramClient):
                 msgs = []
         if msgs:
             await event.client.delete_messages(event.chat_id, msgs)
-        temp = await event.respond("🧹 Purged!")
+        temp = await event.respond("🧹 **Purged successfully!**")
         await asyncio.sleep(2)
         await temp.delete()
 
@@ -249,7 +297,7 @@ def register_userbot_handlers(client: TelegramClient):
             if len(msgs) >= count:
                 break
         await event.client.delete_messages(event.chat_id, msgs)
-        temp = await event.respond(f"🧹 Purged `{len(msgs)}` msgs.")
+        temp = await event.respond(f"🧹 Purged `{len(msgs)}` messages.")
         await asyncio.sleep(2)
         await temp.delete()
 
@@ -310,33 +358,33 @@ def register_userbot_handlers(client: TelegramClient):
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.pin$"))
     async def pin_cmd(event):
         if not event.is_reply:
-            return await event.edit("❌ Reply to a message.")
+            return await event.edit("❌ Reply to a message to pin.")
         rep = await event.get_reply_message()
         await event.client.pin_message(event.chat_id, rep.id, notify=False)
-        await event.edit("📌 Pinned.")
+        await event.edit("📌 **Pinned successfully!**")
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.unpin$"))
     async def unpin_cmd(event):
         if not event.is_reply:
-            return await event.edit("❌ Reply to a message.")
+            return await event.edit("❌ Reply to a message to unpin.")
         rep = await event.get_reply_message()
         await event.client.unpin_message(event.chat_id, rep.id)
-        await event.edit("📌 Unpinned.")
+        await event.edit("📌 **Unpinned successfully!**")
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.unpinall$"))
     async def unpinall_cmd(event):
         await event.client.unpin_message(event.chat_id)
-        await event.edit("📌 All unpinned.")
+        await event.edit("📌 **All messages unpinned!**")
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.check$"))
     async def check_cmd(event):
         chat = await event.get_chat()
-        await event.edit(f"Title: `{chat.title}`\nID: `{chat.id}`")
+        await event.edit(f"ℹ️ Title: `{chat.title}`\n🆔 Chat ID: `{chat.id}`")
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.admins$"))
     async def admins_cmd(event):
         admins = await event.client.get_participants(event.chat_id, filter=events.ChannelParticipantsAdmins)
-        text = f"👮‍♂️ Admins ({len(admins)}):\n\n"
+        text = f"👮‍♂️ **Admins ({len(admins)}):**\n\n"
         for a in admins:
             text += f"• `{a.first_name}` (`{a.id}`)\n"
         await event.edit(text)
@@ -344,17 +392,16 @@ def register_userbot_handlers(client: TelegramClient):
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.zombies(?:\s+(remove))?$"))
     async def zombies_cmd(event):
         rem = (event.pattern_match.group(1) or "").lower() == "remove"
-        msg = await event.edit("🧟 Scanning...")
+        msg = await event.edit("🧟 Scanning for deleted accounts...")
         z = 0
         async for u in event.client.iter_participants(event.chat_id):
             if u.deleted:
                 z += 1
-                if rem:
-                    try:
-                        await event.client.kick_participant(event.chat_id, u.id)
-                    except Exception:
-                        pass
-        await msg.edit(f"Cleaned `{z}` zombies." if rem else f"Found `{z}` zombies. Use `.zombies remove`.")
+                try:
+                    await event.client.kick_participant(event.chat_id, u.id)
+                except Exception:
+                    pass
+        await msg.edit(f"🧟 Cleaned `{z}` deleted accounts (zombies)!" if z > 0 else "✅ No zombies found in this group.")
 
 # ================= ASSISTANT BOT HANDLERS =================
 def register_bot_handlers(bot: TelegramClient):
@@ -442,6 +489,21 @@ def register_bot_handlers(bot: TelegramClient):
 async def main():
     print(">> Starting host application...")
     await start_web_server()
+
+    # Preload from STRING_SESSION env if set
+    session_env = os.environ.get("STRING_SESSION", "").strip()
+    if session_env:
+        try:
+            u_cl = TelegramClient(StringSession(session_env), API_ID, API_HASH)
+            await u_cl.connect()
+            if await u_cl.is_user_authorized():
+                register_userbot_handlers(u_cl)
+                me = await u_cl.get_me()
+                active_clients[me.id] = u_cl
+                asyncio.create_task(u_cl.run_until_disconnected())
+                print(f">> Userbot connected as {me.first_name}")
+        except Exception as e:
+            print(f">> Env session load failed: {e}")
 
     # Load users from database
     cursor.execute("SELECT user_id, session_str FROM users WHERE is_active=1")
